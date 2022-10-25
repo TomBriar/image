@@ -442,27 +442,29 @@ impl<W: Write> JpegEncoder<W> {
         width: u32,
         height: u32,
         color_type: ColorType,
+        quantization_decider: Option<&dyn Fn(f32) -> f32>
     ) -> ImageResult<()> {
+        let quantization_decider = quantization_decider.unwrap_or_else(|| &f32::round);
         match color_type {
             ColorType::L8 => {
                 let image: ImageBuffer<Luma<_>, _> =
                     ImageBuffer::from_raw(width, height, image).unwrap();
-                self.encode_image(&image)
+                self.encode_image(&image, quantization_decider)
             }
             ColorType::La8 => {
                 let image: ImageBuffer<LumaA<_>, _> =
                     ImageBuffer::from_raw(width, height, image).unwrap();
-                self.encode_image(&image)
+                self.encode_image(&image, quantization_decider)
             }
             ColorType::Rgb8 => {
                 let image: ImageBuffer<Rgb<_>, _> =
                     ImageBuffer::from_raw(width, height, image).unwrap();
-                self.encode_image(&image)
+                self.encode_image(&image, quantization_decider)
             }
             ColorType::Rgba8 => {
                 let image: ImageBuffer<Rgba<_>, _> =
                     ImageBuffer::from_raw(width, height, image).unwrap();
-                self.encode_image(&image)
+                self.encode_image(&image, quantization_decider)
             }
             _ => Err(ImageError::Unsupported(
                 UnsupportedError::from_format_and_kind(
@@ -482,7 +484,7 @@ impl<W: Write> JpegEncoder<W> {
     /// this method.
     ///
     /// The Image in encoded with subsampling ratio 4:2:2
-    pub fn encode_image<I: GenericImageView>(&mut self, image: &I) -> ImageResult<()>
+    pub fn encode_image<I: GenericImageView>(&mut self, image: &I, quantization_decider: &dyn Fn(f32) -> f32) -> ImageResult<()>
     where
         I::Pixel: PixelWithColorType,
     {
@@ -566,9 +568,9 @@ impl<W: Write> JpegEncoder<W> {
         self.writer.write_segment(SOS, &buf)?;
 
         if color_type.has_color() {
-            self.encode_rgb(image)
+            self.encode_rgb(image, quantization_decider)
         } else {
-            self.encode_gray(image)
+            self.encode_gray(image, quantization_decider)
         }?;
 
         self.writer.pad_byte()?;
@@ -576,7 +578,7 @@ impl<W: Write> JpegEncoder<W> {
         Ok(())
     }
 
-    fn encode_gray<I: GenericImageView>(&mut self, image: &I) -> io::Result<()> {
+    fn encode_gray<I: GenericImageView>(&mut self, image: &I, quantization_decider: &dyn Fn(f32) -> f32) -> io::Result<()> {
         let mut yblock = [0u8; 64];
         let mut y_dcprev = 0;
         let mut dct_yblock = [0i32; 64];
@@ -591,7 +593,7 @@ impl<W: Write> JpegEncoder<W> {
 
                 // Quantization
                 for (i, dct) in dct_yblock.iter_mut().enumerate() {
-                    *dct = ((*dct / 8) as f32 / f32::from(self.tables[0][i])).round() as i32;
+                    *dct = quantization_decider((*dct / 8) as f32 / f32::from(self.tables[0][i])) as i32;
                 }
 
                 let la = &*self.luma_actable;
@@ -604,7 +606,7 @@ impl<W: Write> JpegEncoder<W> {
         Ok(())
     }
 
-    fn encode_rgb<I: GenericImageView>(&mut self, image: &I) -> io::Result<()> {
+    fn encode_rgb<I: GenericImageView>(&mut self, image: &I, quantization_decider: &dyn Fn(f32) -> f32) -> io::Result<()> {
         let mut y_dcprev = 0;
         let mut cb_dcprev = 0;
         let mut cr_dcprev = 0;
@@ -631,11 +633,9 @@ impl<W: Write> JpegEncoder<W> {
                 // Quantization
                 for i in 0usize..64 {
                     dct_yblock[i] =
-                        ((dct_yblock[i] / 8) as f32 / f32::from(self.tables[0][i])).round() as i32;
-                    dct_cb_block[i] = ((dct_cb_block[i] / 8) as f32 / f32::from(self.tables[1][i]))
-                        .round() as i32;
-                    dct_cr_block[i] = ((dct_cr_block[i] / 8) as f32 / f32::from(self.tables[1][i]))
-                        .round() as i32;
+                        quantization_decider((dct_yblock[i] / 8) as f32 / f32::from(self.tables[0][i])) as i32;
+                    dct_cb_block[i] = quantization_decider((dct_cb_block[i] / 8) as f32 / f32::from(self.tables[1][i])) as i32;
+                    dct_cr_block[i] = quantization_decider((dct_cr_block[i] / 8) as f32 / f32::from(self.tables[1][i])) as i32;
                 }
 
                 let la = &*self.luma_actable;
@@ -659,9 +659,9 @@ impl<W: Write> ImageEncoder for JpegEncoder<W> {
         buf: &[u8],
         width: u32,
         height: u32,
-        color_type: ColorType,
+        color_type: ColorType
     ) -> ImageResult<()> {
-        self.encode(buf, width, height, color_type)
+        self.encode(buf, width, height, color_type, None)
     }
 }
 
